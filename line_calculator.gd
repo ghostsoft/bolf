@@ -291,6 +291,73 @@ static func dda(p0 : Vector2, p1 : Vector2) -> Array[Vector2]:
 		y = y + yinc
 	return out
 
+static func grid_traversal(start : Vector2, end : Vector2) -> Array[Vector2i]:
+	var out : Array[Vector2i]
+	var start_x : int = floor(start.x)
+	var start_y : int = floor(start.y)
+	var end_x : int = floor(end.x)
+	var end_y : int = floor(end.y)
+	
+	var direction : Vector2 = end - start
+	var norm_direction : Vector2 = direction.normalized()
+	var step_x : int = 1 if direction.x > 0 else -1
+	var step_y : int = 1 if direction.y > 0 else -1
+	
+	# include the start position
+	out.append(Vector2i(start_x, start_y))
+	
+	# handle degenerate cases first to speed them up
+	if start_x == end_x && start_y == end_y:
+		# if start and end are in the same grid cell
+		out.append(Vector2i(start_x, start_y))
+	elif start_x == end_x:
+		# if start and end are on the same x
+		for y in range(start_y, end_y + 1, step_y):
+			out.append(Vector2i(start_x, y))
+		out.append(Vector2i(start_x, end_y))
+	elif start_y == end_y:
+		# if start and end are on the same y
+		for x in range(start_x, end_x + 1, step_x):
+			out.append(Vector2i(x, start_y))
+		out.append(Vector2i(end_x, start_y))
+	else:
+		# distance to the nearest grid cell side
+		var near_x : float = start_x + 1 - start.x if step_x > 0 else start.x - start_x
+		var near_y : float = start_y + 1 - start.y if step_y > 0 else start.y - start_y
+		
+		# how far along the ray we must move to cross the first vertical (step_to_vertical_side)
+		# or horizontal (step_to_horizontal_side) grid line
+		var step_to_vertical_side : float = near_x / norm_direction.x
+		var step_to_horizontal_side : float = near_y / norm_direction.y
+		
+		var dx : float = 1.0 / norm_direction.x
+		var dy : float = 1.0 / norm_direction.y
+		
+		var current_x : int = start_x
+		var current_y : int = start_y
+		
+		var grid_bound_x : int = abs(end_x - start_x)
+		var grid_bound_y : int = abs(end_y - start_y)
+		
+		var counter : int = 0
+		
+		while counter != (grid_bound_x + grid_bound_y):
+			if abs(step_to_vertical_side) < abs(step_to_horizontal_side):
+				step_to_vertical_side = step_to_vertical_side + dx # to the next vertical grid line
+				current_x = current_x + step_x
+			else:
+				step_to_horizontal_side = step_to_horizontal_side + dy # to the next horizontal grid line
+				current_y = current_y + step_y
+			
+			counter += 1
+			
+			out.append(Vector2i(current_x, current_y))
+
+	# include the end position
+	out.append(Vector2i(end_x, end_y))
+	
+	return out
+
 # directly from https://www.redblobgames.com/grids/line-drawing.html
 static func simpleLine(p0 : Vector2i, p1 : Vector2i) -> Array[Vector2i]:
 	var points : Array[Vector2i] = []

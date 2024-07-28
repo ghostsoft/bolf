@@ -29,10 +29,6 @@ window/size/window_height_override=720
 window/stretch/mode="viewport"
 window/stretch/scale_mode="integer"
 
-[physics]
-
-common/physics_ticks_per_second=480
-
 [rendering]
 
 renderer/rendering_method="gl_compatibility"

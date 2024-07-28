@@ -2,8 +2,8 @@ extends Node2D
 
 const TIMESTEP = 3
 const GRAVITY = 260
-#const FRICTION = 0.992
-const FRICTION = 0.994
+const FRICTION = 0.95
+#const FRICTION = 0.994
 const BOUNCINESS = 0.1
 const WALL_BOUNCINESS = 0.5
 const SHOT_POWER = 300
@@ -35,8 +35,6 @@ var start_pos : Vector3
 var charge_time := 0.0
 var magnitude := 0.0
 
-#var line_calc : LineCalculator
-
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	normal_map = normal_tex.get_image()
@@ -44,18 +42,16 @@ func _ready() -> void:
 	
 	ball_pos.x = ball.global_position.x
 	ball_pos.y = ball.global_position.y
-	ball_pos.z = 64
+	ball_pos.z = 128
 	
 	set_ball_pos(ball_pos)
 	start_pos = ball_pos
-	
-	#line_calc = LineCalculator.new()
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _physics_process(delta: float) -> void:
 	_z_layering()
 	
-	collide(delta)
+	_collide(delta)
 	queue_redraw()
 	
 	charge_time += delta*2
@@ -80,59 +76,76 @@ func _physics_process(delta: float) -> void:
 		VIEW_ISOMETRIC = !VIEW_ISOMETRIC
 		_reposition_ball()
 
-func collide(delta : float) -> void:
-	var height : int = get_height(Vector2(ball_pos.x, ball_pos.y))
+func _collide(delta : float) -> void:
+	var current_height : int = get_height(Vector2(ball_pos.x, ball_pos.y))
 
-	if velocity.is_equal_approx(Vector3.ZERO) && is_equal_approx(height, ball_pos.z):
+	if velocity.is_equal_approx(Vector3.ZERO) && is_equal_approx(current_height, ball_pos.z):
 		STILL = true
 		return
 	STILL = false
 	
 	velocity.z -= GRAVITY * delta
 	
-	#var magic_value = GRAVITY/TIMESTEP + 0.004
-	var magic_value = GRAVITY*delta+1
-	if velocity.length() < magic_value && is_equal_approx(height, ball_pos.z):
+	var magic_value = GRAVITY*delta
+	if velocity.length() < magic_value && normal_map.get_pixelv(Vector2i(ball_pos.x, ball_pos.y)).b == 1:
 		# we're safely on the ground and not* moving
-		# perhaps add a check for surface normal so we can only rest on flat ground?
 		velocity = Vector3.ZERO
 	
 	var desired_pos = ball_pos + (velocity * delta)
 	
-	if height == -255:
+	if current_height == -255:
 		# we're oob, don't collide
 		set_ball_pos(desired_pos)
-	elif desired_pos.z <= height:
-		# regular collisions happen
-		var normal : Vector3
+		return
+	
+	# regular collisions happen
+	var normal : Vector3
+	
+	# here's a lil hack
+	# due to the perspective and how the sprite is placed, we can get too close
+	# to walls facing the camera. to offset this we test 3 positions
+	# offset towards those walls as well as our ball center
+	var collision_points : Array[Vector3]
+	collision_points.append(ball_pos)
+	collision_points.append(ball_pos + Vector3(0, -4, 0)) # south wall
+	collision_points.append(ball_pos + Vector3(4, 0, 0)) # west wall
+	collision_points.append(ball_pos + Vector3(3, -3, 0)) # corner between the two
+	
+	var wall_raycast : Vector2
+	for i in collision_points:
+		var des_pos = i+(velocity * delta)
+		wall_raycast = _dda_raycast(Vector2(i.x, i.y), Vector2(des_pos.x, des_pos.y))
+		if wall_raycast != Vector2.INF:
+			break
+	
+	#var wall_raycast = _dda_raycast(Vector2(ball_pos.x, ball_pos.y), Vector2(desired_pos.x, desired_pos.y))
+	if wall_raycast != Vector2.INF:
+		# wall collision
+		# make sure we actually get the pixel where the collision occured, depending on direction
+		if velocity.y < 0: wall_raycast.y -= 1
+		if velocity.x < 0: wall_raycast.x -= 1
+		normal = _get_wall_normal(Vector2i(floor(wall_raycast.x), floor(wall_raycast.y)), Vector2(velocity.x, velocity.y))
 		
-		if height > ball_pos.z + 4:
-			# wall collision
-			normal = _get_wall_normal(Vector2(desired_pos.x, desired_pos.y), Vector2(velocity.x, velocity.y))
-			
-			velocity = deflect(velocity, normal, FRICTION, WALL_BOUNCINESS)
-			desired_pos = ball_pos + (velocity * delta)
-			# displace by small amount away from normal
-			desired_pos += normal
-		else:
-			# no wall
-			var ncol := normal_map.get_pixelv(Vector2i(desired_pos.x, desired_pos.y))
-			normal.x = remap(ncol.r, 0, 1, -1, 1)
-			normal.y = -remap(ncol.g, 0, 1, -1, 1)
-			normal.z = ncol.b # turns out z is actually just 0 to 1 :)
+		velocity = _deflect(velocity, normal, FRICTION, WALL_BOUNCINESS)
+		desired_pos = Vector3(wall_raycast.x, wall_raycast.y, ball_pos.z) + (velocity * delta)
+	elif desired_pos.z <= current_height:
+		# floor collision
+		var ncol := normal_map.get_pixelv(Vector2i(desired_pos.x, desired_pos.y))
+		normal.x = remap(ncol.r, 0, 1, -1, 1)
+		normal.y = -remap(ncol.g, 0, 1, -1, 1)
+		normal.z = ncol.b # turns out z is actually just 0 to 1 :)
 
-			velocity = deflect(velocity, normal, FRICTION, BOUNCINESS)
-			#desired_pos = ball_pos + (velocity / TIMESTEP)
-			desired_pos = ball_pos + (velocity * delta)
-			# displace by small amount away from normal
-			desired_pos += normal
-			desired_pos.z = height
+		velocity = _deflect(velocity, normal, FRICTION, BOUNCINESS)
+		desired_pos = ball_pos + (velocity * delta)
+		# displace by small amount away from normal
+		desired_pos += normal
+		desired_pos.z = current_height
 		set_ball_pos(desired_pos)
 	else:
 		# don't collide
 		set_ball_pos(desired_pos)
 
-func deflect(_direction : Vector3, _normal : Vector3, _friction : float, _bounciness : float) -> Vector3:
+func _deflect(_direction : Vector3, _normal : Vector3, _friction : float, _bounciness : float) -> Vector3:
 	var vDotN : float = _direction.dot(-_normal)
 	var u : Vector3 = -_normal*vDotN
 	var w : Vector3 = _direction - u
@@ -283,8 +296,8 @@ func get_height(_position : Vector2) -> int:
 func _get_path() -> Array[Vector2i]:
 	var out : Array[Vector2i]
 	var length = 50
-	var start_point := Vector2(ball_pos.x, ball_pos.y)
-	var line = LineCalculator.dda_supercover(start_point, start_point+direction*length)
+	var start_point := Vector2(floor(ball_pos.x), floor(ball_pos.y))
+	var line = LineCalculator.grid_traversal(start_point, start_point+direction*length)
 	var previous_height = 0
 	var wall_index = -1
 	for i in line.size():
@@ -298,10 +311,10 @@ func _get_path() -> Array[Vector2i]:
 		out.append(line[wall_index])
 		start_point = line[wall_index]
 		var wall_normal = _get_wall_normal(start_point, direction)
-		var deflected = deflect(Vector3(direction.x, direction.y, 0), wall_normal, 1, 1)
+		var deflected = _deflect(Vector3(direction.x, direction.y, 0), wall_normal, 1, 1)
 		length = line.size()-wall_index
 		
-		line = LineCalculator.bresenhamLine(start_point, start_point + Vector2(deflected.x, deflected.y) * length)
+		line = LineCalculator.grid_traversal(start_point, start_point + Vector2(deflected.x, deflected.y) * length)
 		if not line.is_empty(): # sometimes it brings back a 0 length line i guess
 			out.append(line.back())
 	else:
@@ -309,18 +322,60 @@ func _get_path() -> Array[Vector2i]:
 	
 	return out
 
+# javidx9 / OneLoneCoder "Super Fast Ray Casting in Tiled Worlds using DDA"
+# https://www.youtube.com/watch?v=NbSee-XM7WA
+func _dda_raycast(ray_start : Vector2, ray_end : Vector2) -> Vector2:
+	var out : Vector2 = Vector2.INF
+	
+	var ray_dir : Vector2 = (ray_end - ray_start).normalized()
+	var ray_unit_step_size : Vector2
+	#ray_unit_step_size.x = sqrt(1 + (ray_dir.y / ray_dir.x) * (ray_dir.y / ray_dir.x))
+	#ray_unit_step_size.y = sqrt(1 + (ray_dir.x / ray_dir.y) * (ray_dir.x / ray_dir.y))
+	ray_unit_step_size = Vector2(abs(1 / ray_dir.x), abs(1 / ray_dir.y))
+	
+	var map_check : Vector2i = Vector2i(floor(ray_start.x), floor(ray_start.y)) # current tile
+	var end_check : Vector2i = Vector2i(floor(ray_end.x), floor(ray_end.y)) # final tile to check
+	var ray_length_1d : Vector2 # accumulated length in columns/rows
+	
+	var step : Vector2i
+	
+	if ray_dir.x < 0:
+		step.x = -1
+		ray_length_1d.x = (ray_start.x - float(map_check.x)) * ray_unit_step_size.x
+	else:
+		step.x = 1
+		ray_length_1d.x = (float(map_check.x + 1) - ray_start.x) * ray_unit_step_size.x
+	if ray_dir.y < 0:
+		step.y = -1
+		ray_length_1d.y = (ray_start.y - float(map_check.y)) * ray_unit_step_size.y
+	else:
+		step.y = 1
+		ray_length_1d.y = (float(map_check.y + 1) - ray_start.y) * ray_unit_step_size.y
+	
+	var collided : bool = false
+	var distance : float = 0.0
+	var prev_checked : Vector2i
+	while !collided && (map_check != end_check):
+		prev_checked  = map_check
+		if ray_length_1d.x < ray_length_1d.y:
+			map_check.x += step.x # update current tile
+			distance = ray_length_1d.x
+			ray_length_1d.x += ray_unit_step_size.x
+		else:
+			map_check.y += step.y
+			distance = ray_length_1d.y
+			ray_length_1d.y += ray_unit_step_size.y
+		
+		#out.append(map_check)
+		if get_height(map_check) > get_height(prev_checked) + 4:
+			collided = true
+	
+	if collided:
+		out = ray_start + ray_dir * distance
+	
+	return out
+
 func _draw() -> void:
-	# just testing line drawing algorithms
-	#var point : PackedVector2Array
-	#var color : PackedColorArray
-	##var line = LineCalculator.dda(Vector2(1.1,0.2), Vector2(-5.2,12.1))
-	#var line = LineCalculator.supercover_line(Vector2(0.4,0.0), Vector2(5.5,-12.0))
-	#for i in line.size():
-		#point.append(line[i])
-		#color.append(Color.RED)
-		#draw_primitive(point, color, point)
-		#color.clear()
-		#point.clear()
 	
 	if STILL:
 		var path = _get_path()
@@ -330,5 +385,6 @@ func _draw() -> void:
 				path[i].x = path[i].x + path[i].y
 				path[i].y = -(tmp_x/2) + (path[i].y/2)
 		draw_line(ball.global_position, path[0], Color.YELLOW)
+		#draw_line(Vector2(floor(ball_pos.x), floor(ball_pos.y)), path[0], Color.YELLOW)
 		if path.size() > 1:
 			draw_line(path[0], path[1], Color.RED)
